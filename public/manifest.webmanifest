@@ -1,0 +1,14 @@
+{
+  "name": "Rovefern",
+  "short_name": "Rovefern",
+  "description": "Plan hiking and backpacking trips: routes, gear, pack weight, food, water, budget and safety.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f3ec",
+  "theme_color": "#1f3b2c",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

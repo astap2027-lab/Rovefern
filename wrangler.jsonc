@@ -1,0 +1,16 @@
+{
+  // Cloudflare Workers config. Static site from public/, API from worker/index.js.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "rovefern",
+  "main": "./worker/index.js",
+  "compatibility_date": "2026-11-05",
+  // worker/index.js is already bundled by `npm run build`; upload it as-is.
+  "no_bundle": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "observability": { "enabled": true }
+}
