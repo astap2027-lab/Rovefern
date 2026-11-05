@@ -11179,24 +11179,84 @@ var AIError = class extends Error {
   }
   status;
 };
+var schemaCache = /* @__PURE__ */ new WeakMap();
 function toolSchema(schema) {
+  const hit = schemaCache.get(schema);
+  if (hit) return hit;
   const json2 = external_exports.toJSONSchema(schema, { target: "draft-2020-12" });
   delete json2.$schema;
+  schemaCache.set(schema, json2);
   return json2;
 }
 async function structuredCall(opts) {
   const key = getEnv("ANTHROPIC_API_KEY");
   if (!key) throw new AIError("AI is not configured on this server.", 503);
-  const body = {
-    model: MODEL(),
-    max_tokens: opts.maxTokens ?? 4096,
-    system: opts.system,
-    messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
-    tools: [{ name: opts.toolName, description: opts.toolDescription, input_schema: toolSchema(opts.schema) }],
-    tool_choice: { type: "tool", name: opts.toolName }
-  };
+  const system = `${opts.system}
+
+When you're ready, respond by calling the ${opts.toolName} tool exactly once with your complete answer. Don't reply with plain text.`;
+  const messages = opts.messages.map((m) => ({ role: m.role, content: m.content }));
+  const tools = [{ name: opts.toolName, description: opts.toolDescription, input_schema: toolSchema(opts.schema) }];
+  if (opts.webSearch && getEnv("DISABLE_WEB_SEARCH") !== "1") {
+    tools.push({
+      type: "web_search_20250305",
+      name: "web_search",
+      max_uses: opts.webSearch.maxUses,
+      user_location: { type: "approximate", country: "AU", timezone: "Australia/Sydney" }
+    });
+  }
+  let nudged = false;
+  for (let step = 0; step < 5; step++) {
+    const data = await callApi(key, { model: MODEL(), max_tokens: opts.maxTokens ?? 4096, system, messages, tools, tool_choice: { type: "auto" } });
+    collectSources(data.content ?? [], opts.sources);
+    if (data.stop_reason === "pause_turn") {
+      messages.push({ role: "assistant", content: data.content });
+      continue;
+    }
+    const block = data.content?.find((c) => c.type === "tool_use" && c.name === opts.toolName);
+    let input = block?.input;
+    if (!block) {
+      const text = data.content?.filter((c) => c.type === "text").map((c) => c.text ?? "").join("") ?? "";
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          input = JSON.parse(m[0]);
+        } catch {
+        }
+      }
+      if (input === void 0) {
+        if (data.stop_reason === "max_tokens") throw new AIError("The AI's answer was too long and got cut off. Try a shorter request.", 502);
+        if (!nudged) {
+          nudged = true;
+          messages.push({ role: "assistant", content: data.content?.length ? data.content : "(no answer)" });
+          messages.push({ role: "user", content: `Please give your answer now by calling the ${opts.toolName} tool.` });
+          continue;
+        }
+        throw new AIError("The AI didn't return a usable answer. Try again.", 502);
+      }
+    }
+    const parsed = opts.schema.safeParse(input);
+    if (!parsed.success) {
+      console.error("AI output failed validation", JSON.stringify(parsed.error.issues).slice(0, 1e3));
+      if (data.stop_reason === "max_tokens") throw new AIError("The AI's answer was too long and got cut off. Try a shorter request.", 502);
+      throw new AIError("The AI's answer didn't pass validation, so nothing was changed. Try rephrasing.", 502);
+    }
+    return parsed.data;
+  }
+  throw new AIError("The AI took too many steps. Try a simpler request.", 502);
+}
+function collectSources(content, sink) {
+  if (!sink) return;
+  for (const c of content) {
+    if (c.type === "web_search_tool_result" && Array.isArray(c.content)) {
+      for (const r of c.content) {
+        if (r.type === "web_search_result" && r.url && !sink.some((s) => s.url === r.url)) sink.push({ title: r.title || r.url, url: r.url });
+      }
+    }
+  }
+}
+async function callApi(key, body) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 55e3);
+  const timer = setTimeout(() => controller.abort(), 12e4);
   let res;
   try {
     res = await fetch(`${getEnv("ANTHROPIC_BASE_URL") || "https://api.anthropic.com"}/v1/messages`, {
@@ -11205,7 +11265,7 @@ async function structuredCall(opts) {
       body: JSON.stringify(body),
       signal: controller.signal
     });
-  } catch (e) {
+  } catch {
     throw new AIError(controller.signal.aborted ? "The AI took too long to respond. Try again." : "Couldn't reach the AI service.", 504);
   } finally {
     clearTimeout(timer);
@@ -11214,19 +11274,16 @@ async function structuredCall(opts) {
     const text = await res.text().catch(() => "");
     console.error("Anthropic error", res.status, text.slice(0, 500));
     if (res.status === 429) throw new AIError("The AI is busy right now. Wait a moment and try again.", 429);
-    if (res.status === 401) throw new AIError("The server's AI key was rejected.", 502);
-    throw new AIError("The AI service returned an error.", 502);
+    if (res.status === 401) throw new AIError("The server's AI key was rejected. Check the ANTHROPIC_API_KEY secret.", 502);
+    if (res.status === 529) throw new AIError("The AI service is overloaded right now. Try again in a minute.", 503);
+    let detail = "";
+    try {
+      detail = JSON.parse(text).error?.message ?? "";
+    } catch {
+    }
+    throw new AIError(`The AI service returned an error (${res.status})${detail ? `: ${detail.slice(0, 300)}` : "."}`, 502);
   }
-  const data = await res.json();
-  const block = data.content?.find((c) => c.type === "tool_use" && c.name === opts.toolName);
-  if (!block) throw new AIError("The AI didn't return a usable answer.", 502);
-  const parsed = opts.schema.safeParse(block.input);
-  if (!parsed.success) {
-    console.error("AI output failed validation", JSON.stringify(parsed.error.issues).slice(0, 1e3));
-    if (data.stop_reason === "max_tokens") throw new AIError("The AI's answer was too long and got cut off. Try a shorter request.", 502);
-    throw new AIError("The AI's answer didn't pass validation, so nothing was changed. Try rephrasing.", 502);
-  }
-  return parsed.data;
+  return await res.json();
 }
 
 // src/server/http.ts
@@ -11284,19 +11341,34 @@ function nodeHandler(run2) {
 }
 
 // src/server/prompts.ts
+var HONESTY = `
+Be genuinely useful, like an experienced local hiking guide. Give specific, practical answers: name real tracks, campgrounds, train/bus lines, licence requirements and rough costs. Use your knowledge and web search confidently.
+Honesty rules (keep these, but don't let them make you vague):
+- Never invent a trail, campsite or place. Real, well-known facts are fine to state; the app labels your figures as "AI suggestion" so users know to double-check.
+- Prefer giving your best estimate over leaving a blank. Use null only when you genuinely have no reasonable idea.
+- Don't claim live conditions (closures, fire bans, today's weather) unless you found them in a search result, and say when that information is dated.
+- Water: never say untreated natural water is safe to drink. Say where water is usually available and to treat it.
+- Never recommend dropping essential safety gear (first aid, navigation, emergency communication, warm layers, rain shell, headlamp, water treatment) to save weight.
+- Prices are estimates; say so briefly.
+`;
 function optimiseSystem() {
-  return `You are an expert lightweight-backpacking gear advisor. Analyse the hiker's gear list for this trip and suggest ways to reduce weight while staying safe and comfortable for the expected conditions.
+  return `You are an expert lightweight-backpacking gear advisor in Australia. Analyse the hiker's gear list for this trip and help them carry less while staying safe and comfortable.
 
-Look for: unusually heavy items for their category, duplicates, items with overlapping functions, items unsuitable for the conditions, chances to share group gear, unnecessary items, and multi-use options.
+Look for: heavy items for their category, duplicates, overlapping items, things unsuited to the conditions, chances to share group gear, unnecessary items, multi-use swaps \u2014 and important things that are missing for this trip (kind "add_missing", with a category and typical weight).
 
 Rules:
-- Describe alternatives generically ("a closed-cell foam mat", "a 900 ml titanium pot") unless the user's own item is already named \u2014 never invent a specific product's weight, price or availability.
-- alternativeWeightGrams is a typical weight for that TYPE of item (an estimate), or null.
-- Never suggest removing essential safety equipment (first aid, navigation, emergency communication, warm layers, rain shell, headlamp, water treatment). Mark safety-relevant suggestions safetyCritical=true and explain the trade-off.
-- Consider temperature, weather, trip length and group size. A lighter sleeping bag that isn't warm enough is not a good suggestion.
-- Don't do arithmetic on totals; the app calculates savings itself.
-- Return at most 8 of the most valuable suggestions, ordered by impact.`;
+- You may name specific well-known lighter products and their listed weights (e.g. "Sea to Summit Ultralight mat, about 395 g") \u2014 the app labels them as AI suggestions. Don't quote prices as facts; a rough price range is fine if useful.
+- alternativeWeightGrams: the weight of what you're proposing (for add_missing: the item's typical weight).
+- Never suggest removing essential safety equipment (first aid, navigation, emergency communication, warm layers, rain shell, headlamp, water treatment). Mark safety-relevant suggestions safetyCritical=true.
+- Consider temperature, weather, trip length and group size.
+- Don't calculate totals; the app does that.
+- Return up to 8 of the most valuable suggestions, biggest impact first.`;
 }
+var TRAIL_INFO_SYSTEM = `You are Rovefern's trail researcher for Australian walks. Given a trail name and location from OpenStreetMap, search the web (prefer the state parks service page, then reputable walking sites) and summarise what a hiker needs to plan it.
+- Be specific and practical: grade, typical duration, distance and climb, campgrounds and whether they need booking, water, permits/fees, how to get there (including public transport if any), fishing if relevant, hazards, best season, highlights.
+- Only mention current alerts or closures you actually found, with their date.
+- If you can't find the trail, say so in the summary and give whatever general guidance you reasonably can.
+${HONESTY}`;
 
 // src/lib/domain/types.ts
 var GEAR_CATEGORIES = [
@@ -11385,6 +11457,7 @@ var GearSuggestionSchema = external_exports.object({
   essential: external_exports.boolean(),
   shareable: external_exports.boolean(),
   alreadyOwned: external_exports.boolean().describe("True if the user said they already own this"),
+  estimatedWeightGrams: num(0, 2e4).nullable().optional().describe("Your best estimate of a typical weight for this item, in grams (the user's stated weight if given)"),
   reason: optStr(300)
 });
 var BudgetSuggestionSchema = external_exports.object({
@@ -11415,10 +11488,23 @@ var TripDraftSchema = external_exports.object({
   checklistExtras: external_exports.array(external_exports.object({ group: external_exports.enum(["gear", "permits", "transport", "safety", "food", "admin"]), label: str(200), detail: optStr(300) })).max(12),
   limitations: external_exports.array(str(400)).max(10)
 });
+var DestinationOptionSchema = external_exports.object({
+  title: str(120).describe("e.g. 'Royal National Park Coast Track'"),
+  region: str(120),
+  summary: str(500),
+  whyItFits: str(400),
+  gettingThere: str(400).describe("How to get to the start and back, e.g. public transport"),
+  walking: str(300).describe("Rough daily distances and terrain"),
+  camping: str(300),
+  highlights: external_exports.array(str(120)).max(5),
+  watchOutFor: optStr(300)
+});
 var PlanResponseSchema = external_exports.object({
-  reply: str(1500).describe("Short, friendly message to the user"),
+  reply: str(2500).describe("Friendly message to the user. Directly answer any questions they asked."),
+  answers: external_exports.array(external_exports.object({ question: str(200), answer: str(800) })).max(8).optional().describe("Direct answers to practical questions the user raised or will obviously need (transport, licences, bookings, budget)"),
+  options: external_exports.array(DestinationOptionSchema).max(3).optional().describe("2-3 destination options when the user hasn't settled on one"),
   ready: external_exports.boolean().describe("True when you have enough to build the trip"),
-  questions: external_exports.array(external_exports.object({ question: str(200), options: external_exports.array(str(80)).max(5).optional() })).max(3).describe("Targeted follow-up questions when important details are missing"),
+  questions: external_exports.array(external_exports.object({ question: str(200), options: external_exports.array(str(80)).max(5).optional() })).max(3).default([]).describe("Targeted follow-up questions when important details are missing"),
   extracted: RequirementsSchema,
   trip: TripDraftSchema.nullable().optional()
 });
@@ -11506,7 +11592,8 @@ var OptimiseSchema = external_exports.object({
   suggestions: external_exports.array(
     external_exports.object({
       kind: external_exports.enum(["replace", "remove", "share", "duplicate", "overlap", "unsuitable", "add_missing"]),
-      gearIds: external_exports.array(str(80)).max(5).describe("Library ids of the items this is about"),
+      gearIds: external_exports.array(str(80)).max(5).describe("Library ids of the items this is about (empty for add_missing)"),
+      category: external_exports.enum(GEAR_CATEGORIES).nullable().optional().describe("For add_missing: the category of the item to add"),
       title: str(140),
       proposal: str(300).describe("The alternative, described generically (e.g. 'a closed-cell foam mat') unless the user named a product"),
       alternativeWeightGrams: num(0, 5e4).nullable().describe("Typical weight for that type of item, or null. This is an estimate, not a product spec."),
@@ -11515,6 +11602,34 @@ var OptimiseSchema = external_exports.object({
       safetyCritical: external_exports.boolean()
     })
   ).max(12)
+});
+var TrailInfoSchema = external_exports.object({
+  summary: str(1200),
+  managedBy: optStr(160),
+  officialUrl: optStr(400),
+  difficulty: optStr(200).describe("Local grade, e.g. 'Grade 4 (AS 2156.1)'"),
+  typicalDuration: optStr(160),
+  distanceKm: num(0, 2e3).nullable().optional(),
+  elevationGainM: num(0, 2e4).nullable().optional(),
+  bestSeason: optStr(300),
+  gettingThere: optStr(600).describe("Including public transport if possible"),
+  camping: external_exports.array(external_exports.object({ name: str(160), notes: optStr(300), bookingRequired: external_exports.boolean().nullable().optional() })).max(12).optional(),
+  water: optStr(500),
+  permitsAndFees: optStr(500),
+  fishing: optStr(400),
+  hazards: external_exports.array(str(300)).max(8).optional(),
+  highlights: external_exports.array(str(160)).max(8).optional(),
+  currentAlerts: optStr(500).describe("Only if you found a current alert or closure, with its date")
+});
+var WeightEstimateSchema = external_exports.object({
+  estimates: external_exports.array(
+    external_exports.object({
+      gearId: str(80),
+      weightGrams: num(0, 2e4),
+      confidence: external_exports.enum(["high", "medium", "low"]).describe("high = known product spec, medium = typical for that model type, low = rough guess"),
+      basis: str(200).describe("e.g. 'Manufacturer spec for Sea to Summit Ultralight mat (regular)' or 'Typical 2-person dome tent'")
+    })
+  ).max(60)
 });
 
 // src/server/routes/optimise.ts

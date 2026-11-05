@@ -1,6 +1,6 @@
 // Rovefern service worker: caches the app shell so saved trips open offline.
 // Trip data itself lives in IndexedDB, so it's available whenever the shell loads.
-const CACHE = "rovefern-279cfee300";
+const CACHE = "rovefern-063e173757";
 const SHELL = ["/", "/index.html", "/styles.css", "/assets/app.js", "/assets/leaflet.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png"];
 
 self.addEventListener("install", (e) => {

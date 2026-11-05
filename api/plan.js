@@ -11647,24 +11647,84 @@ var AIError = class extends Error {
   }
   status;
 };
+var schemaCache = /* @__PURE__ */ new WeakMap();
 function toolSchema(schema) {
+  const hit = schemaCache.get(schema);
+  if (hit) return hit;
   const json2 = external_exports.toJSONSchema(schema, { target: "draft-2020-12" });
   delete json2.$schema;
+  schemaCache.set(schema, json2);
   return json2;
 }
 async function structuredCall(opts) {
   const key = getEnv("ANTHROPIC_API_KEY");
   if (!key) throw new AIError("AI is not configured on this server.", 503);
-  const body = {
-    model: MODEL(),
-    max_tokens: opts.maxTokens ?? 4096,
-    system: opts.system,
-    messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
-    tools: [{ name: opts.toolName, description: opts.toolDescription, input_schema: toolSchema(opts.schema) }],
-    tool_choice: { type: "tool", name: opts.toolName }
-  };
+  const system = `${opts.system}
+
+When you're ready, respond by calling the ${opts.toolName} tool exactly once with your complete answer. Don't reply with plain text.`;
+  const messages = opts.messages.map((m) => ({ role: m.role, content: m.content }));
+  const tools = [{ name: opts.toolName, description: opts.toolDescription, input_schema: toolSchema(opts.schema) }];
+  if (opts.webSearch && getEnv("DISABLE_WEB_SEARCH") !== "1") {
+    tools.push({
+      type: "web_search_20250305",
+      name: "web_search",
+      max_uses: opts.webSearch.maxUses,
+      user_location: { type: "approximate", country: "AU", timezone: "Australia/Sydney" }
+    });
+  }
+  let nudged = false;
+  for (let step = 0; step < 5; step++) {
+    const data = await callApi(key, { model: MODEL(), max_tokens: opts.maxTokens ?? 4096, system, messages, tools, tool_choice: { type: "auto" } });
+    collectSources(data.content ?? [], opts.sources);
+    if (data.stop_reason === "pause_turn") {
+      messages.push({ role: "assistant", content: data.content });
+      continue;
+    }
+    const block = data.content?.find((c) => c.type === "tool_use" && c.name === opts.toolName);
+    let input = block?.input;
+    if (!block) {
+      const text = data.content?.filter((c) => c.type === "text").map((c) => c.text ?? "").join("") ?? "";
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          input = JSON.parse(m[0]);
+        } catch {
+        }
+      }
+      if (input === void 0) {
+        if (data.stop_reason === "max_tokens") throw new AIError("The AI's answer was too long and got cut off. Try a shorter request.", 502);
+        if (!nudged) {
+          nudged = true;
+          messages.push({ role: "assistant", content: data.content?.length ? data.content : "(no answer)" });
+          messages.push({ role: "user", content: `Please give your answer now by calling the ${opts.toolName} tool.` });
+          continue;
+        }
+        throw new AIError("The AI didn't return a usable answer. Try again.", 502);
+      }
+    }
+    const parsed = opts.schema.safeParse(input);
+    if (!parsed.success) {
+      console.error("AI output failed validation", JSON.stringify(parsed.error.issues).slice(0, 1e3));
+      if (data.stop_reason === "max_tokens") throw new AIError("The AI's answer was too long and got cut off. Try a shorter request.", 502);
+      throw new AIError("The AI's answer didn't pass validation, so nothing was changed. Try rephrasing.", 502);
+    }
+    return parsed.data;
+  }
+  throw new AIError("The AI took too many steps. Try a simpler request.", 502);
+}
+function collectSources(content, sink) {
+  if (!sink) return;
+  for (const c of content) {
+    if (c.type === "web_search_tool_result" && Array.isArray(c.content)) {
+      for (const r of c.content) {
+        if (r.type === "web_search_result" && r.url && !sink.some((s) => s.url === r.url)) sink.push({ title: r.title || r.url, url: r.url });
+      }
+    }
+  }
+}
+async function callApi(key, body) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 55e3);
+  const timer = setTimeout(() => controller.abort(), 12e4);
   let res;
   try {
     res = await fetch(`${getEnv("ANTHROPIC_BASE_URL") || "https://api.anthropic.com"}/v1/messages`, {
@@ -11673,7 +11733,7 @@ async function structuredCall(opts) {
       body: JSON.stringify(body),
       signal: controller.signal
     });
-  } catch (e) {
+  } catch {
     throw new AIError(controller.signal.aborted ? "The AI took too long to respond. Try again." : "Couldn't reach the AI service.", 504);
   } finally {
     clearTimeout(timer);
@@ -11682,19 +11742,16 @@ async function structuredCall(opts) {
     const text = await res.text().catch(() => "");
     console.error("Anthropic error", res.status, text.slice(0, 500));
     if (res.status === 429) throw new AIError("The AI is busy right now. Wait a moment and try again.", 429);
-    if (res.status === 401) throw new AIError("The server's AI key was rejected.", 502);
-    throw new AIError("The AI service returned an error.", 502);
+    if (res.status === 401) throw new AIError("The server's AI key was rejected. Check the ANTHROPIC_API_KEY secret.", 502);
+    if (res.status === 529) throw new AIError("The AI service is overloaded right now. Try again in a minute.", 503);
+    let detail = "";
+    try {
+      detail = JSON.parse(text).error?.message ?? "";
+    } catch {
+    }
+    throw new AIError(`The AI service returned an error (${res.status})${detail ? `: ${detail.slice(0, 300)}` : "."}`, 502);
   }
-  const data = await res.json();
-  const block = data.content?.find((c) => c.type === "tool_use" && c.name === opts.toolName);
-  if (!block) throw new AIError("The AI didn't return a usable answer.", 502);
-  const parsed = opts.schema.safeParse(block.input);
-  if (!parsed.success) {
-    console.error("AI output failed validation", JSON.stringify(parsed.error.issues).slice(0, 1e3));
-    if (data.stop_reason === "max_tokens") throw new AIError("The AI's answer was too long and got cut off. Try a shorter request.", 502);
-    throw new AIError("The AI's answer didn't pass validation, so nothing was changed. Try rephrasing.", 502);
-  }
-  return parsed.data;
+  return await res.json();
 }
 
 // src/server/http.ts
@@ -11753,40 +11810,47 @@ function nodeHandler(run2) {
 var clip = (v, max) => typeof v === "string" ? v.slice(0, max) : "";
 
 // src/server/prompts.ts
-var ACCURACY_RULES = `
-Accuracy rules \u2014 these are non-negotiable:
-- Never invent an established trail, campsite, hut, water source, permit, regulation, price, product specification, closure or live condition.
-- If you are not confident about a number (distance, elevation gain/loss, price), use null. A blank is better than a wrong figure.
-- Only call something an established trail (isEstablishedTrail=true) if it is a real, named route you are confident exists.
-- Water: never say natural water is safe to drink. If you don't know of a specific reliable source, say water availability is unverified.
-- Budget estimates are rough planning figures. Put them in budgetLines with a short note on what they assume; never imply something is bookable at a price.
-- No alerts found never means a trail is safe. Remind people to check the official park authority before they go.
-- Never recommend removing essential safety equipment (first aid, navigation, emergency communication, insulation, rain protection) to save weight.
-- Respect the local grading system of the country; don't compare grades across countries as if they were equivalent.
+var HONESTY = `
+Be genuinely useful, like an experienced local hiking guide. Give specific, practical answers: name real tracks, campgrounds, train/bus lines, licence requirements and rough costs. Use your knowledge and web search confidently.
+Honesty rules (keep these, but don't let them make you vague):
+- Never invent a trail, campsite or place. Real, well-known facts are fine to state; the app labels your figures as "AI suggestion" so users know to double-check.
+- Prefer giving your best estimate over leaving a blank. Use null only when you genuinely have no reasonable idea.
+- Don't claim live conditions (closures, fire bans, today's weather) unless you found them in a search result, and say when that information is dated.
+- Water: never say untreated natural water is safe to drink. Say where water is usually available and to treat it.
+- Never recommend dropping essential safety gear (first aid, navigation, emergency communication, warm layers, rain shell, headlamp, water treatment) to save weight.
+- Prices are estimates; say so briefly.
 `;
 function planSystem(today, settings) {
-  return `You are Rovefern's trip planner: an experienced, warm and practical hiking and backpacking guide. You help people from beginners to experienced trekkers plan hikes anywhere in the world.
+  return `You are Rovefern's trip planner: a friendly, experienced Australian hiking and camping guide who helps people from complete beginners to experienced trekkers. Rovefern focuses on Australia; if someone asks about overseas, help them anyway.
 
-Today's date is ${today}. The user's preferred currency is ${settings.currency} and units are ${settings.units}.
+Today's date is ${today}. The user's currency is ${settings.currency} and units are ${settings.units}. Use Australian English.
 
-Your job each turn:
-1. Extract everything the user has told you into "extracted". Use only what they said; leave other fields empty.
-2. If important details are missing (destination or region, rough length of the trip, group size), ask up to 3 short, targeted questions \u2014 conversational, not a form. Offer quick options where useful. Don't ask about things they already told you. Don't ask about minor details; sensible defaults are fine.
-3. When you have enough (at minimum: a destination or region and a trip length), set ready=true and build "trip".
+You can search the web. Use it to check things that matter for the plan: current track or campground pages from the state parks service (e.g. NSW National Parks), public transport to trailheads, campground booking and fees, fishing licence rules, closures. Keep searches focused (a few is plenty).
+
+How to respond each turn:
+1. Extract everything the user told you into "extracted".
+2. Answer their questions directly in "answers" (and briefly in "reply"). Also answer the obvious practical questions they'll have \u2014 e.g. how to get there without a car, whether they need a booking or a licence, rough food costs.
+3. If they haven't settled on a destination, give 2-3 strong, real "options" that fit everything they said (transport, distances, budget, interests like fishing), and ask them to pick. Don't build the trip yet.
+4. If something essential is still unclear (e.g. trip length or group size), ask up to 3 short "questions" with quick-pick options. Otherwise make sensible assumptions and say what you assumed.
+5. When the destination and length are clear, set ready=true and build "trip".
 
 When building a trip:
-- Prefer a trail from Rovefern's verified catalogue when it fits (set trailId). Catalogue:
+- Use these verified trails when they fit (set trailId), otherwise any real track: 
 ${catalogueForPrompt()}
-- Otherwise choose a real, well-known route you are confident about, or if none fits, be explicit that the plan is a suggestion that needs checking against official sources (add a limitation).
-- One itinerary day per trip day. Give each day a from/to, terrain, suggested breaks, overnight stop, water notes and warnings. Use null for any figure you aren't confident about.
-- gearSuggestions: the equipment this trip needs, taking into account gear the user already owns (mark those so they aren't bought again \u2014 still list them). Include essential safety items. Mark items normally shared in a group (tent, stove, filter, first aid) as shareable.
-- budgetLines: the main cost categories for this trip in the trip currency (use the destination's currency unless the user stated one). Rough estimates or null.
-- checklistExtras: trip-specific preparation tasks (e.g. booking huts, transport to a remote trailhead).
-- limitations: what you could not verify and what the user must check themselves.
-- summary: 2\u20134 sentences on why this trip fits what they asked for.
-${ACCURACY_RULES}
-Keep "reply" short and friendly (under 80 words). Use the user's spelling conventions.`;
+- One itinerary day per trip day with from/to, distanceKm, ascentM, descentM (your best estimates), terrain, suggested breaks, overnight campground, water (where it's usually available and that it needs treating), resupply and warnings.
+- gearSuggestions: what this trip needs, marking alreadyOwned for things they have. Include estimatedWeightGrams for each item (a typical weight for that kind of item).
+- budgetLines: realistic estimates in the trip currency for transport, campground fees, permits, food, etc.
+- checklistExtras: trip-specific tasks (book campground, buy fishing licence, check Opal card balance...).
+- limitations: only the genuinely important caveats, briefly.
+- summary: 2-4 sentences on why this trip suits them.
+${HONESTY}
+Keep "reply" conversational and under 150 words; put detail in "answers" and "options".`;
 }
+var TRAIL_INFO_SYSTEM = `You are Rovefern's trail researcher for Australian walks. Given a trail name and location from OpenStreetMap, search the web (prefer the state parks service page, then reputable walking sites) and summarise what a hiker needs to plan it.
+- Be specific and practical: grade, typical duration, distance and climb, campgrounds and whether they need booking, water, permits/fees, how to get there (including public transport if any), fishing if relevant, hazards, best season, highlights.
+- Only mention current alerts or closures you actually found, with their date.
+- If you can't find the trail, say so in the summary and give whatever general guidance you reasonably can.
+${HONESTY}`;
 
 // src/lib/domain/types.ts
 var GEAR_CATEGORIES = [
@@ -11875,6 +11939,7 @@ var GearSuggestionSchema = external_exports.object({
   essential: external_exports.boolean(),
   shareable: external_exports.boolean(),
   alreadyOwned: external_exports.boolean().describe("True if the user said they already own this"),
+  estimatedWeightGrams: num(0, 2e4).nullable().optional().describe("Your best estimate of a typical weight for this item, in grams (the user's stated weight if given)"),
   reason: optStr(300)
 });
 var BudgetSuggestionSchema = external_exports.object({
@@ -11905,10 +11970,23 @@ var TripDraftSchema = external_exports.object({
   checklistExtras: external_exports.array(external_exports.object({ group: external_exports.enum(["gear", "permits", "transport", "safety", "food", "admin"]), label: str(200), detail: optStr(300) })).max(12),
   limitations: external_exports.array(str(400)).max(10)
 });
+var DestinationOptionSchema = external_exports.object({
+  title: str(120).describe("e.g. 'Royal National Park Coast Track'"),
+  region: str(120),
+  summary: str(500),
+  whyItFits: str(400),
+  gettingThere: str(400).describe("How to get to the start and back, e.g. public transport"),
+  walking: str(300).describe("Rough daily distances and terrain"),
+  camping: str(300),
+  highlights: external_exports.array(str(120)).max(5),
+  watchOutFor: optStr(300)
+});
 var PlanResponseSchema = external_exports.object({
-  reply: str(1500).describe("Short, friendly message to the user"),
+  reply: str(2500).describe("Friendly message to the user. Directly answer any questions they asked."),
+  answers: external_exports.array(external_exports.object({ question: str(200), answer: str(800) })).max(8).optional().describe("Direct answers to practical questions the user raised or will obviously need (transport, licences, bookings, budget)"),
+  options: external_exports.array(DestinationOptionSchema).max(3).optional().describe("2-3 destination options when the user hasn't settled on one"),
   ready: external_exports.boolean().describe("True when you have enough to build the trip"),
-  questions: external_exports.array(external_exports.object({ question: str(200), options: external_exports.array(str(80)).max(5).optional() })).max(3).describe("Targeted follow-up questions when important details are missing"),
+  questions: external_exports.array(external_exports.object({ question: str(200), options: external_exports.array(str(80)).max(5).optional() })).max(3).default([]).describe("Targeted follow-up questions when important details are missing"),
   extracted: RequirementsSchema,
   trip: TripDraftSchema.nullable().optional()
 });
@@ -11996,7 +12074,8 @@ var OptimiseSchema = external_exports.object({
   suggestions: external_exports.array(
     external_exports.object({
       kind: external_exports.enum(["replace", "remove", "share", "duplicate", "overlap", "unsuitable", "add_missing"]),
-      gearIds: external_exports.array(str(80)).max(5).describe("Library ids of the items this is about"),
+      gearIds: external_exports.array(str(80)).max(5).describe("Library ids of the items this is about (empty for add_missing)"),
+      category: external_exports.enum(GEAR_CATEGORIES).nullable().optional().describe("For add_missing: the category of the item to add"),
       title: str(140),
       proposal: str(300).describe("The alternative, described generically (e.g. 'a closed-cell foam mat') unless the user named a product"),
       alternativeWeightGrams: num(0, 5e4).nullable().describe("Typical weight for that type of item, or null. This is an estimate, not a product spec."),
@@ -12005,6 +12084,34 @@ var OptimiseSchema = external_exports.object({
       safetyCritical: external_exports.boolean()
     })
   ).max(12)
+});
+var TrailInfoSchema = external_exports.object({
+  summary: str(1200),
+  managedBy: optStr(160),
+  officialUrl: optStr(400),
+  difficulty: optStr(200).describe("Local grade, e.g. 'Grade 4 (AS 2156.1)'"),
+  typicalDuration: optStr(160),
+  distanceKm: num(0, 2e3).nullable().optional(),
+  elevationGainM: num(0, 2e4).nullable().optional(),
+  bestSeason: optStr(300),
+  gettingThere: optStr(600).describe("Including public transport if possible"),
+  camping: external_exports.array(external_exports.object({ name: str(160), notes: optStr(300), bookingRequired: external_exports.boolean().nullable().optional() })).max(12).optional(),
+  water: optStr(500),
+  permitsAndFees: optStr(500),
+  fishing: optStr(400),
+  hazards: external_exports.array(str(300)).max(8).optional(),
+  highlights: external_exports.array(str(160)).max(8).optional(),
+  currentAlerts: optStr(500).describe("Only if you found a current alert or closure, with its date")
+});
+var WeightEstimateSchema = external_exports.object({
+  estimates: external_exports.array(
+    external_exports.object({
+      gearId: str(80),
+      weightGrams: num(0, 2e4),
+      confidence: external_exports.enum(["high", "medium", "low"]).describe("high = known product spec, medium = typical for that model type, low = rough guess"),
+      basis: str(200).describe("e.g. 'Manufacturer spec for Sea to Summit Ultralight mat (regular)' or 'Typical 2-person dome tent'")
+    })
+  ).max(60)
 });
 
 // src/server/routes/plan.ts
@@ -12076,17 +12183,20 @@ async function run(input) {
   if (!messages.length) throw new AIError("Tell me about the hike you have in mind.", 400);
   if (!aiEnabled()) return { mode: "offline", ...offlinePlan(messages, body.settings.currency) };
   const today = body.today ?? (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  const sources = [];
   const result = await structuredCall({
     system: planSystem(today, body.settings),
     messages,
     toolName: "plan_response",
-    toolDescription: "Respond to the user: extracted requirements, follow-up questions, and the trip plan when ready.",
+    toolDescription: "Respond to the user: extracted requirements, answers, destination options or follow-up questions, and the trip plan when ready.",
     schema: PlanResponseSchema,
-    maxTokens: 12e3
+    maxTokens: 16e3,
+    webSearch: { maxUses: 5 },
+    sources
   });
   if (result.ready && !result.trip) result.ready = false;
   if (result.trip?.trailId && !findTrail(result.trip.trailId)) result.trip.trailId = null;
-  return { mode: "live", ...result };
+  return { mode: "live", ...result, sources: sources.slice(0, 12) };
 }
 var plan_default = nodeHandler(run);
 // Annotate the CommonJS export names for ESM import in node:

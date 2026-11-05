@@ -4,12 +4,13 @@ An AI-powered planner for hiking and backpacking trips. You describe a trip and 
 
 ## What works today
 
-- **Planning**: type one prompt ("Describe it") or answer a guide's questions one at a time ("Chat with a guide"). The AI pulls out destination, dates, group, budget, currency, experience, scenery and gear you already own, and asks targeted questions about anything important that's missing.
+- **Planning** (Australia-first, with web search): suggests 2–3 destinations to pick from, answers practical questions (transport, licences, bookings) and links its sources. Type one prompt ("Describe it") or answer a guide's questions one at a time ("Chat with a guide"). The AI pulls out destination, dates, group, budget, currency, experience, scenery and gear you already own, and asks targeted questions about anything important that's missing.
 - **Trip dashboard** with eight tabs: overview, itinerary, map, gear, packing, food and water, budget, preparation. An assistant drawer changes the trip in plain language ("make it seven days", "add Sam", "I own a 1.2 kg tent"), shows what changed and lets you undo it.
-- **Explore trails**: six established trails whose figures come from official sources, with filters, detail pages and "Plan this trip".
+- **Explore trails**: search every mapped walking track in Australia (OpenStreetMap), with the real route line, mapped length, an elevation profile (Open-Meteo), GPX download, an AI look-up of campgrounds, transport, permits and hazards from park websites (with sources), and "Plan this trip". Six hand-verified trails use official figures.
 - **Gear library**: manual entry, quick add ("Titanium mug 110 g"), AI entry from a description or a photo, search, filters, favourites, duplicate, delete with undo, and a "to get" list.
 - **Pack weights**: base, consumable, worn, total carried and all-up weight, at the start and end of the trip, per person, with shared group gear.
-- **AI gear optimisation**: suggestions you can accept or reject. Essential safety gear is never removed.
+- **AI gear optimisation**: lighter swaps, sharing, duplicates and missing items, which you can accept or reject. Essential safety gear is never removed.
+- **AI weight estimates** for items without a weight (labelled, so you know to weigh them later). Totals are always calculated by the app.
 - **Packing assistant**: a backpack zone diagram built from your actual items, a checklist and progress.
 - **Food plan**: a rotating menu, day-by-day overrides, resupply days, a spare day, a shopping list and a fuel estimate. **Water**: estimates given as ranges with the assumptions shown.
 - **Budget**: estimates vs actual spending, per person and per day, remaining budget, settling up between people, and currency conversion using ECB rates.
@@ -25,6 +26,10 @@ An AI-powered planner for hiking and backpacking trips. You describe a trip and 
 - **Cloud accounts and sync.** The UI says this plainly, and backup/restore covers moving between devices for now. Adding accounts means a `SyncProvider` (for example Supabase auth and Postgres) that uploads the same `AppState` JSON the backup uses, which also gives guest-to-account migration.
 - **Live park alerts.** No single source covers every country, so Rovefern links to the official authority for each country and region instead of claiming coverage it doesn't have.
 - **Offline maps.** These aren't offered, and the app says so.
+
+## Costs
+
+Web search costs $10 per 1,000 searches, plus tokens. A full plan uses up to 5 searches, a trail look-up up to 4 and an assistant message up to 3. Set `DISABLE_WEB_SEARCH=1` as a variable to turn searching off. OpenStreetMap, Nominatim, Overpass and Open-Meteo are free for light use and are called from the visitor's browser.
 
 ## Accuracy rules (built into the code)
 
