@@ -159,7 +159,7 @@ function Assistant({ trip, d, gear, onClose }: { trip: Trip; d: DerivedTrip; gea
     setBusy(true);
     try {
       const history = chat.filter((c) => !c.error).slice(-12).map((c) => ({ role: c.role, content: c.content + (c.changes?.length ? `\n[Applied: ${c.changes.join(" ")}]` : "") }));
-      const res = await api<AssistantResponse & { mode: string }>("assistant", { message: m, history, snapshot: tripSnapshot(trip, gear, d), today: todayISO() });
+      const res = await api<AssistantResponse & { mode: string; sources?: { title: string; url: string }[] }>("assistant", { message: m, history, snapshot: tripSnapshot(trip, gear, d), today: todayISO() });
       let changes: string[] = [];
       if (res.ops.length) {
         const { tripOps, newGear } = translateAssistantOps(res.ops, trip);
@@ -180,7 +180,7 @@ function Assistant({ trip, d, gear, onClose }: { trip: Trip; d: DerivedTrip; gea
         }
         changes = result.changes;
       }
-      actions.appendChat(trip.id, { role: "assistant", content: res.reply, at: new Date().toISOString(), changes });
+      actions.appendChat(trip.id, { role: "assistant", content: res.reply, at: new Date().toISOString(), changes, sources: res.sources?.slice(0, 5) });
     } catch (e) {
       actions.appendChat(trip.id, { role: "assistant", content: (e as Error).message, at: new Date().toISOString(), error: true });
     } finally {
@@ -212,6 +212,25 @@ function Assistant({ trip, d, gear, onClose }: { trip: Trip; d: DerivedTrip; gea
             {chat.map((c, i) => (
               <div key={i} className={`msg ${c.role} ${c.error ? "error" : ""}`}>
                 {c.content}
+                {c.sources && c.sources.length > 0 && (
+                  <div className="tiny" style={{ marginTop: 6, whiteSpace: "normal" }}>
+                    Sources:{" "}
+                    {c.sources.map((s, j) => (
+                      <span key={s.url}>
+                        {j ? ", " : ""}
+                        <a href={s.url} target="_blank" rel="noreferrer">
+                          {(() => {
+                            try {
+                              return new URL(s.url).hostname.replace(/^www\./, "");
+                            } catch {
+                              return s.title;
+                            }
+                          })()}
+                        </a>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {c.changes && c.changes.length > 0 && (
                   <>
                     <ul className="changes">

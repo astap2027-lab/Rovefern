@@ -90,13 +90,13 @@ export function Privacy() {
       </p>
       <h2>AI features</h2>
       <p>
-        When you use the planner, the trip assistant, gear reading or gear analysis, the text you type, any photo you attach, and a summary of the relevant trip are sent through our server to our AI provider (Anthropic) to generate a response. We don't keep these requests after the response is returned, apart from short-lived error logs used to fix problems. Don't include sensitive personal information in AI requests.
+        When you use the planner, the trip assistant, trail look-ups, gear reading, weight estimates or gear analysis, the text you type, any photo you attach, and a summary of the relevant trip are sent through our server to our AI provider (Anthropic) to generate a response. The AI may run web searches based on your request. We don't keep these requests after the response is returned, apart from short-lived error logs used to fix problems. Don't include sensitive personal information in AI requests.
       </p>
       <h2>Third-party services</h2>
       <p>To show maps, weather and exchange rates, your browser requests data directly from:</p>
       <ul>
-        <li>OpenStreetMap and OpenTopoMap (map tiles) — they receive the map area you view.</li>
-        <li>Open-Meteo (weather) — it receives the coordinates and dates of your trip.</li>
+        <li>OpenStreetMap and OpenTopoMap (map tiles), Nominatim (place search) and Overpass (trail search) — they receive the area or place you search for.</li>
+        <li>Open-Meteo (weather and elevation) — it receives the coordinates and dates of your trip or trail.</li>
         <li>Frankfurter (exchange rates) — it receives no trip information.</li>
         <li>Wikimedia Commons (photos) and Google Fonts (typefaces).</li>
       </ul>

@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { aiEnabled, structuredCall, type ChatMessage } from "../anthropic";
+import { aiEnabled, structuredCall, type ChatMessage, type Source } from "../anthropic";
 import { clip, nodeHandler } from "../http";
 import { assistantSystem } from "../prompts";
 import { AssistantResponseSchema } from "../schemas";
@@ -34,15 +34,18 @@ export async function run(input: unknown): Promise<unknown> {
     if (last && last.role === m.role) last.content += "\n\n" + m.content;
     else merged.push({ ...m });
   }
+  const sources: Source[] = [];
   const result = await structuredCall({
     system: assistantSystem(body.today ?? new Date().toISOString().slice(0, 10)),
     messages: merged,
     toolName: "update_trip",
     toolDescription: "Reply to the user and list the validated operations to apply to their trip.",
     schema: AssistantResponseSchema,
-    maxTokens: 8000,
+    maxTokens: 10000,
+    webSearch: { maxUses: 3 },
+    sources,
   });
-  return { mode: "live", ...result };
+  return { mode: "live", ...result, sources: sources.slice(0, 8) };
 }
 
 export default nodeHandler(run);

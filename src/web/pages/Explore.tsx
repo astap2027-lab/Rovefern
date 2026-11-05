@@ -6,6 +6,7 @@ import { TrailCard } from "../components/TrailCard";
 import { CommonsPhoto, Empty, Notice, PhotoCredit, ProvBadge, useFormat } from "../components/ui";
 import { trailProv } from "../lib/buildTrip";
 import { Link, useTitle } from "../router";
+import { TrailSearch } from "./TrailSearch";
 
 const DURATIONS = [
   { k: "any", label: "Any length" },
@@ -58,10 +59,18 @@ export function Explore() {
       <div className="page-head">
         <div>
           <h1>Explore trails</h1>
-          <p className="lede">Established multi-day trails, with figures taken from each trail's managing authority and linked to the source.</p>
+          <p className="lede">Search every mapped walking track in Australia, or start from one of our verified multi-day trails.</p>
         </div>
       </div>
 
+      <TrailSearch />
+
+      <div className="row between" style={{ margin: "40px 0 12px", alignItems: "flex-end" }}>
+        <div>
+          <h2 style={{ margin: 0 }}>Verified trails</h2>
+          <p className="small muted" style={{ margin: 0 }}>Figures checked against each trail's official managing authority.</p>
+        </div>
+      </div>
       <div className="card flat" style={{ marginBottom: 24 }}>
         <div className="grid grid-4">
           <label className="field" style={{ gridColumn: "1 / -1" }}>
@@ -141,7 +150,7 @@ export function Explore() {
         <div>
           <h2>Can't find your route?</h2>
           <p className="muted">
-            Rovefern's catalogue is deliberately small: we only list trails whose details we've checked against official sources. For anywhere else, plan with AI (it will label what it suggests), import a GPX file of your route, or enter your stages yourself.
+            Some tracks aren't mapped as a named trail. Describe where you want to go and the planner will suggest options, or import a GPX file of your route.
           </p>
         </div>
         <div className="row" style={{ alignItems: "center" }}>

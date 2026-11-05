@@ -9,6 +9,8 @@ import { run as gear } from "./server/routes/gear";
 import { run as health } from "./server/routes/health";
 import { run as optimise } from "./server/routes/optimise";
 import { run as plan } from "./server/routes/plan";
+import { run as trailInfo } from "./server/routes/trail-info";
+import { run as weights } from "./server/routes/weights";
 
 interface Env {
   ASSETS: { fetch: (request: Request) => Promise<Response> };
@@ -17,7 +19,7 @@ interface Env {
   [key: string]: unknown;
 }
 
-const ROUTES: Record<string, Run> = { assistant, gear, health, optimise, plan };
+const ROUTES: Record<string, Run> = { assistant, gear, health, optimise, plan, "trail-info": trailInfo, weights };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

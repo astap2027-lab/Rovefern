@@ -8,6 +8,7 @@ import { gToOz, parseWeight, round } from "../../lib/engine/units";
 import { prov } from "../../lib/engine/factory";
 import { Icon } from "../components/icons";
 import { Empty, Modal, Notice, NumField, ProvBadge, Spinner, Term, useFormat } from "../components/ui";
+import { EstimateButton } from "../components/EstimateButton";
 import { CATEGORY_COLORS, WeightBreakdown } from "../components/WeightBreakdown";
 import { api } from "../lib/api";
 import { newGearItem } from "../lib/buildTrip";
@@ -160,6 +161,13 @@ export function GearPage() {
           </div>
 
           <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1fr)", gap: 20 }}>
+            {gear.some((g) => g.weightGrams == null || g.weightProvenance.kind === "estimate" || g.weightProvenance.kind === "unverified") && (
+              <Notice tone="info">
+                {gear.filter((g) => g.weightGrams == null).length > 0 ? `${gear.filter((g) => g.weightGrams == null).length} items have no weight yet. ` : "Some weights are rough category guesses. "}
+                AI can estimate them from the brand, model or item type. Estimates are labelled so you know to weigh them later.{" "}
+                <EstimateButton items={gear.filter((g) => g.weightGrams == null || g.weightProvenance.kind === "estimate" || g.weightProvenance.kind === "unverified")} />
+              </Notice>
+            )}
             <div className="card flat">
               <form
                 className="row"
@@ -540,7 +548,12 @@ export function AiGearAdd({ onClose, onAdded }: { onClose: () => void; onAdded?:
         shareable: i.shareable,
         notes: i.notes ?? undefined,
         imageDataUrl: chosen.length === 1 ? image : undefined,
-        weightProvenance: i.weightGrams != null ? prov("user", { note: "From your description" }) : prov("unverified", { note: "Weight not given" }),
+        weightProvenance:
+          i.weightGrams == null
+            ? prov("unverified", { note: "Weight not given" })
+            : i.needsConfirmation.some((n) => /estimate/i.test(n))
+              ? prov("ai", { note: "AI estimate — weigh yours to make totals exact" })
+              : prov("user", { note: "From your description" }),
       }),
     );
     actions.addGear(out);

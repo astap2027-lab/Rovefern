@@ -8,8 +8,10 @@ import { api, todayISO } from "../lib/api";
 import { buildTripFromPlan } from "../lib/buildTrip";
 import { actions, getState, toast, useStore, type ChatTurn } from "../lib/store";
 import { Link, navigate, useLocation, useTitle } from "../router";
+import { chainSegments, loadTrail, osmUrl } from "../lib/osm";
+import { prov, uid } from "../../lib/engine/factory";
 
-type PlanResult = PlanResponse & { mode: "live" | "offline" };
+type PlanResult = PlanResponse & { mode: "live" | "offline"; sources?: { title: string; url: string }[] };
 
 const OPENER = "Where would you like to go hiking? A country, a region, or a trail you've had your eye on.";
 
@@ -58,6 +60,16 @@ export function Plan() {
     started.current = true;
     const q = query.get("q");
     const trail = findTrail(query.get("trail"));
+    const osmKey = query.get("osm");
+    if (osmKey) {
+      navigate("/plan", { replace: true });
+      const name = query.get("name") ?? "this trail";
+      const km = query.get("km");
+      actions.setPlanner({ messages: [], last: undefined, osm: { key: osmKey, name } });
+      setMode("quick");
+      setInput(`I'd like to hike ${name}${query.get("region") ? ` near ${query.get("region")}` : ""}${km ? ` (about ${km} km on the map)` : ""}. `);
+      return;
+    }
     if (q || trail) {
       navigate("/plan", { replace: true });
       const text = q ?? `I'd like to hike the ${trail!.name} in ${trail!.region}, ${trail!.country}.`;
@@ -72,7 +84,7 @@ export function Plan() {
   }, []);
 
   const reset = () => {
-    actions.setPlanner({ messages: [], last: undefined, mode });
+    actions.setPlanner({ messages: [], last: undefined, mode, osm: undefined });
     setAnswers({});
     setError("");
   };
@@ -82,10 +94,12 @@ export function Plan() {
     const { trip, newGear } = buildTripFromPlan(last, getState().gear, settings.currency);
     trip.requirements.rawPrompt = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
     if (newGear.length) actions.addGear(newGear);
+    const osm = planner.osm;
     actions.addTrip(trip);
-    actions.setPlanner({ messages: [], last: undefined, mode });
+    actions.setPlanner({ messages: [], last: undefined, mode, osm: undefined });
     toast(`Created ${trip.title}`);
     navigate(`/trip/${trip.id}`);
+    if (osm) attachOsmRoute(trip.id, osm.key, osm.name);
   };
 
   const submitAnswers = () => {
@@ -219,6 +233,7 @@ export function Plan() {
             </Notice>
           )}
 
+          {last && <PlanExtras plan={last} busy={busy} onPick={(o) => send(`Let's go with ${o.title} (${o.region}).`)} />}
           {last?.ready && last.trip && <PlanPreview plan={last} onCreate={createFromPlan} busy={busy} />}
         </div>
 
@@ -462,4 +477,117 @@ function ManualStart() {
       </form>
     </details>
   );
+}
+
+type Option = NonNullable<PlanResponse["options"]>[number];
+
+function PlanExtras({ plan, busy, onPick }: { plan: PlanResult; busy: boolean; onPick: (o: Option) => void }) {
+  const answers = plan.answers ?? [];
+  const options = plan.options ?? [];
+  const sources = plan.sources ?? [];
+  if (!answers.length && !options.length && !sources.length) return null;
+  return (
+    <div className="stack-lg">
+      {options.length > 0 && (
+        <section aria-labelledby="opts">
+          <h2 id="opts" style={{ fontSize: "1.5rem" }}>
+            Pick a destination
+          </h2>
+          <div className="grid grid-3">
+            {options.map((o) => (
+              <article key={o.title} className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div className="small muted">{o.region}</div>
+                <h3 style={{ margin: 0 }}>{o.title}</h3>
+                <p className="small" style={{ margin: 0 }}>
+                  {o.summary}
+                </p>
+                <dl className="kv small" style={{ gridTemplateColumns: "1fr" }}>
+                  <dt>Why it fits</dt>
+                  <dd>{o.whyItFits}</dd>
+                  <dt>Getting there</dt>
+                  <dd>{o.gettingThere}</dd>
+                  <dt>Walking</dt>
+                  <dd>{o.walking}</dd>
+                  <dt>Camping</dt>
+                  <dd>{o.camping}</dd>
+                  {o.highlights.length > 0 && (
+                    <>
+                      <dt>Highlights</dt>
+                      <dd>{o.highlights.join(" · ")}</dd>
+                    </>
+                  )}
+                  {o.watchOutFor && (
+                    <>
+                      <dt>Watch out for</dt>
+                      <dd>{o.watchOutFor}</dd>
+                    </>
+                  )}
+                </dl>
+                <button className="btn sm" style={{ marginTop: "auto" }} disabled={busy} onClick={() => onPick(o)}>
+                  Choose this
+                </button>
+              </article>
+            ))}
+          </div>
+          <p className="tiny muted">Suggested by AI using web search. Check details with the park's official page before you go.</p>
+        </section>
+      )}
+      {answers.length > 0 && (
+        <section className="card" aria-labelledby="answers">
+          <h3 id="answers">Your questions, answered</h3>
+          <dl className="kv" style={{ gridTemplateColumns: "1fr" }}>
+            {answers.map((a) => (
+              <div key={a.question} style={{ marginBottom: 10 }}>
+                <dt>{a.question}</dt>
+                <dd>{a.answer}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+      {sources.length > 0 && <SourceList sources={sources} />}
+    </div>
+  );
+}
+
+export function SourceList({ sources }: { sources: { title: string; url: string }[] }) {
+  return (
+    <details className="card flat small">
+      <summary style={{ cursor: "pointer", fontWeight: 650 }}>Sources checked ({sources.length})</summary>
+      <ul style={{ paddingLeft: 18, margin: "8px 0 0" }}>
+        {sources.map((s) => (
+          <li key={s.url}>
+            <a href={s.url} target="_blank" rel="noreferrer">
+              {s.title}
+            </a>{" "}
+            <span className="muted">{(() => { try { return new URL(s.url).hostname.replace(/^www\./, ""); } catch { return ""; } })()}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/** When a trip was planned from an OpenStreetMap trail, add its mapped route to the trip. */
+async function attachOsmRoute(tripId: string, key: string, name: string) {
+  try {
+    const g = await loadTrail(key);
+    const line = chainSegments(g.segments);
+    if (line.length < 2) return;
+    const p = prov("third_party", { sourceName: "OpenStreetMap", sourceUrl: osmUrl(key), note: `${name} as mapped on OpenStreetMap` });
+    actions.patchTrip(tripId, (t) => {
+      t.route = { coordinates: line.map((x) => [x.lat, x.lon]), provenance: p };
+      if (!t.waypoints.some((w) => w.kind === "start")) {
+        t.waypoints.push({ id: uid(), name: "Start", kind: "start", lat: line[0].lat, lon: line[0].lon, provenance: p });
+        t.waypoints.push({ id: uid(), name: "Finish", kind: "finish", lat: line[line.length - 1].lat, lon: line[line.length - 1].lon, provenance: p });
+      }
+      if (t.destination.lat == null) {
+        t.destination.lat = line[0].lat;
+        t.destination.lon = line[0].lon;
+      }
+      return t;
+    });
+  } catch {
+    /* route is a bonus; the trip still works without it */
+  }
 }

@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { extractRequirements, missingQuestions, normaliseAnswer, starterKit } from "../../lib/ai/heuristics";
 import { defaultShareable, guessCategory } from "../../lib/domain/gearDefaults";
 import { findTrail } from "../../lib/domain/trails";
-import { AIError, aiEnabled, structuredCall, type ChatMessage } from "../anthropic";
+import { AIError, aiEnabled, structuredCall, type ChatMessage, type Source } from "../anthropic";
 import { clip, nodeHandler } from "../http";
 import { planSystem } from "../prompts";
 import { PlanResponseSchema, type PlanResponse } from "../schemas";
@@ -84,17 +84,20 @@ export async function run(input: unknown): Promise<unknown> {
   if (!aiEnabled()) return ({ mode: "offline", ...offlinePlan(messages, body.settings.currency) });
 
   const today = body.today ?? new Date().toISOString().slice(0, 10);
+  const sources: Source[] = [];
   const result = await structuredCall({
     system: planSystem(today, body.settings),
     messages,
     toolName: "plan_response",
-    toolDescription: "Respond to the user: extracted requirements, follow-up questions, and the trip plan when ready.",
+    toolDescription: "Respond to the user: extracted requirements, answers, destination options or follow-up questions, and the trip plan when ready.",
     schema: PlanResponseSchema,
-    maxTokens: 12000,
+    maxTokens: 16000,
+    webSearch: { maxUses: 5 },
+    sources,
   });
   if (result.ready && !result.trip) result.ready = false;
   if (result.trip?.trailId && !findTrail(result.trip.trailId)) result.trip.trailId = null;
-  return { mode: "live", ...result };
+  return { mode: "live", ...result, sources: sources.slice(0, 12) };
 }
 
 export default nodeHandler(run);

@@ -6,6 +6,7 @@ import { match, useLocation } from "./router";
 import { Home } from "./pages/Home";
 import { Plan } from "./pages/Plan";
 import { Explore, TrailDetail } from "./pages/Explore";
+import { OsmTrailDetail } from "./pages/TrailSearch";
 import { GearPage } from "./pages/Gear";
 import { Adventures } from "./pages/Adventures";
 import { TripPage } from "./trip/TripPage";
@@ -31,6 +32,7 @@ function Routes() {
   if (path === "/") return <Home />;
   if (path === "/plan") return <Plan />;
   if (path === "/explore") return <Explore />;
+  if ((m = match("/explore/osm/:key", path))) return <OsmTrailDetail trailKey={m.key} />;
   if ((m = match("/explore/:id", path))) return <TrailDetail id={m.id} />;
   if (path === "/gear") return <GearPage />;
   if (path === "/adventures") return <Adventures />;

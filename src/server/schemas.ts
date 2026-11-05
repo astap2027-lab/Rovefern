@@ -57,6 +57,7 @@ export const GearSuggestionSchema = z.object({
   essential: z.boolean(),
   shareable: z.boolean(),
   alreadyOwned: z.boolean().describe("True if the user said they already own this"),
+  estimatedWeightGrams: num(0, 20_000).nullable().optional().describe("Your best estimate of a typical weight for this item, in grams (the user's stated weight if given)"),
   reason: optStr(300),
 });
 
@@ -92,12 +93,31 @@ export const TripDraftSchema = z.object({
   limitations: z.array(str(400)).max(10),
 });
 
+export const DestinationOptionSchema = z.object({
+  title: str(120).describe("e.g. 'Royal National Park Coast Track'"),
+  region: str(120),
+  summary: str(500),
+  whyItFits: str(400),
+  gettingThere: str(400).describe("How to get to the start and back, e.g. public transport"),
+  walking: str(300).describe("Rough daily distances and terrain"),
+  camping: str(300),
+  highlights: z.array(str(120)).max(5),
+  watchOutFor: optStr(300),
+});
+
 export const PlanResponseSchema = z.object({
-  reply: str(1500).describe("Short, friendly message to the user"),
+  reply: str(2500).describe("Friendly message to the user. Directly answer any questions they asked."),
+  answers: z
+    .array(z.object({ question: str(200), answer: str(800) }))
+    .max(8)
+    .optional()
+    .describe("Direct answers to practical questions the user raised or will obviously need (transport, licences, bookings, budget)"),
+  options: z.array(DestinationOptionSchema).max(3).optional().describe("2-3 destination options when the user hasn't settled on one"),
   ready: z.boolean().describe("True when you have enough to build the trip"),
   questions: z
     .array(z.object({ question: str(200), options: z.array(str(80)).max(5).optional() }))
     .max(3)
+    .default([])
     .describe("Targeted follow-up questions when important details are missing"),
   extracted: RequirementsSchema,
   trip: TripDraftSchema.nullable().optional(),
@@ -202,7 +222,8 @@ export const OptimiseSchema = z.object({
     .array(
       z.object({
         kind: z.enum(["replace", "remove", "share", "duplicate", "overlap", "unsuitable", "add_missing"]),
-        gearIds: z.array(str(80)).max(5).describe("Library ids of the items this is about"),
+        gearIds: z.array(str(80)).max(5).describe("Library ids of the items this is about (empty for add_missing)"),
+        category: z.enum(GEAR_CATEGORIES).nullable().optional().describe("For add_missing: the category of the item to add"),
         title: str(140),
         proposal: str(300).describe("The alternative, described generically (e.g. 'a closed-cell foam mat') unless the user named a product"),
         alternativeWeightGrams: num(0, 50_000).nullable().describe("Typical weight for that type of item, or null. This is an estimate, not a product spec."),
@@ -214,3 +235,37 @@ export const OptimiseSchema = z.object({
     .max(12),
 });
 export type Optimise = z.infer<typeof OptimiseSchema>;
+
+export const TrailInfoSchema = z.object({
+  summary: str(1200),
+  managedBy: optStr(160),
+  officialUrl: optStr(400),
+  difficulty: optStr(200).describe("Local grade, e.g. 'Grade 4 (AS 2156.1)'"),
+  typicalDuration: optStr(160),
+  distanceKm: num(0, 2000).nullable().optional(),
+  elevationGainM: num(0, 20000).nullable().optional(),
+  bestSeason: optStr(300),
+  gettingThere: optStr(600).describe("Including public transport if possible"),
+  camping: z.array(z.object({ name: str(160), notes: optStr(300), bookingRequired: z.boolean().nullable().optional() })).max(12).optional(),
+  water: optStr(500),
+  permitsAndFees: optStr(500),
+  fishing: optStr(400),
+  hazards: z.array(str(300)).max(8).optional(),
+  highlights: z.array(str(160)).max(8).optional(),
+  currentAlerts: optStr(500).describe("Only if you found a current alert or closure, with its date"),
+});
+export type TrailInfo = z.infer<typeof TrailInfoSchema>;
+
+export const WeightEstimateSchema = z.object({
+  estimates: z
+    .array(
+      z.object({
+        gearId: str(80),
+        weightGrams: num(0, 20_000),
+        confidence: z.enum(["high", "medium", "low"]).describe("high = known product spec, medium = typical for that model type, low = rough guess"),
+        basis: str(200).describe("e.g. 'Manufacturer spec for Sea to Summit Ultralight mat (regular)' or 'Typical 2-person dome tent'"),
+      }),
+    )
+    .max(60),
+});
+export type WeightEstimate = z.infer<typeof WeightEstimateSchema>;

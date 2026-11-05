@@ -12,6 +12,13 @@ import { actions, toast, useStore } from "../lib/store";
 import { AiGearAdd, GearForm } from "../pages/Gear";
 import { Link } from "../router";
 import { useTripActions, type TabProps } from "./TripPage";
+import { EstimateButton } from "../components/EstimateButton";
+
+function tripItemsNeedingWeights(trip: TabProps["trip"], gear: GearItem[]): GearItem[] {
+  const ids = new Set(trip.gear.map((e) => e.gearId));
+  return gear.filter((g) => ids.has(g.id) && (g.weightGrams == null || g.weightProvenance.kind === "estimate" || g.weightProvenance.kind === "unverified"));
+}
+
 
 const SAFETY_CATS = new Set(["first_aid", "safety", "navigation"]);
 
@@ -108,9 +115,14 @@ export function GearTab({ trip, d, gear }: TabProps) {
             Carried weights differ by {f.w(d.weights.imbalanceGrams)} across the group. Reassign shared items below to even things out.
           </Notice>
         )}
-        {d.weights.people.some((p) => p.unknownWeightItems.length) && (
-          <Notice tone="warn">
-            These items have no weight, so they aren't in the totals: {[...new Set(d.weights.people.flatMap((p) => p.unknownWeightItems))].join(", ")}.
+        {(d.weights.people.some((p) => p.unknownWeightItems.length) || tripItemsNeedingWeights(trip, gear).length > 0) && (
+          <Notice tone={d.weights.people.some((p) => p.unknownWeightItems.length) ? "warn" : "info"}>
+            {d.weights.people.some((p) => p.unknownWeightItems.length) ? (
+              <>These items have no weight, so they aren't in the totals: {[...new Set(d.weights.people.flatMap((p) => p.unknownWeightItems))].join(", ")}. </>
+            ) : (
+              <>Some weights are rough category guesses. </>
+            )}
+            <EstimateButton items={tripItemsNeedingWeights(trip, gear)} />
           </Notice>
         )}
       </section>
@@ -366,6 +378,18 @@ function Optimiser({ trip, d, gear }: Pick<TabProps, "trip" | "d" | "gear">) {
     } else if (s.kind === "remove" || s.kind === "duplicate") {
       const drop = s.kind === "duplicate" ? entries.slice(1) : entries;
       a.ops(drop.map((e) => ({ op: "remove_trip_gear" as const, entryId: e.id })), "accept gear suggestion");
+    } else if (s.kind === "add_missing") {
+      const item = newGearItem({
+        name: s.proposal.slice(0, 120),
+        category: s.category ?? "misc",
+        owned: false,
+        essential: s.safetyCritical,
+        weightGrams: s.alternativeWeightGrams,
+        weightProvenance: s.alternativeWeightGrams != null ? prov("ai", { note: "Typical weight suggested by AI" }) : prov("unverified"),
+        notes: s.explanation,
+      });
+      actions.addGear([item]);
+      a.ops([{ op: "add_library_gear_to_trip", gearId: item.id }], "accept gear suggestion");
     } else if (s.kind === "share" && trip.participants.length > 1) {
       const [keep, ...rest] = entries;
       if (keep) a.patch((t) => ({ ...t, gear: t.gear.filter((e) => !rest.some((r) => r.id === e.id)).map((e) => (e.id === keep.id ? { ...e, scope: "assigned", carrierId: e.carrierId ?? t.participants[0].id, quantity: 1 } : e)) }), "accept gear suggestion");
@@ -383,7 +407,7 @@ function Optimiser({ trip, d, gear }: Pick<TabProps, "trip" | "d" | "gear">) {
         </button>
       </div>
       <p className="small muted" style={{ marginTop: 0 }}>
-        AI looks for heavy items, duplicates, overlaps and things to share, with this trip's conditions in mind. It never suggests dropping essential safety gear. Alternative weights are typical figures for that type of item, not product specs. Savings are calculated by the app.
+        AI checks your kit against this trip's conditions: heavy items, duplicates, things to share, lighter swaps and anything important you're missing. It never suggests dropping essential safety gear. Savings are calculated by the app from the weights shown.
       </p>
       {err && <Notice tone="warn">{err}</Notice>}
       {summary && <p>{summary}</p>}
@@ -434,7 +458,7 @@ function Optimiser({ trip, d, gear }: Pick<TabProps, "trip" | "d" | "gear">) {
                 </dl>
                 {s.state === "open" ? (
                   <div className="row" style={{ marginTop: 10 }}>
-                    {["replace", "remove", "duplicate", "share"].includes(s.kind) ? (
+                    {["replace", "remove", "duplicate", "share", "add_missing"].includes(s.kind) ? (
                       <button className="btn sm" onClick={() => accept(s)}>
                         Accept
                       </button>

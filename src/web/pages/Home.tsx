@@ -15,7 +15,7 @@ const HERO_FILE = "Cradle Mountain Behind Dove Lake.jpg";
 
 const FEATURES: { icon: IconName; title: string; body: string }[] = [
   { icon: "spark", title: "AI trip planning", body: "Describe the trip in your own words. Rovefern asks only what it needs, then builds a day-by-day plan you can edit." },
-  { icon: "compass", title: "Trail discovery", body: "Established trails with figures from official park sources, and a clear label on anything that isn't." },
+  { icon: "compass", title: "Every trail in Australia", body: "Search any mapped walking track, see its real route and elevation, and look up campgrounds, transport and permits." },
   { icon: "backpack", title: "Gear library", body: "Add your kit once with real weights, then reuse it on every trip." },
   { icon: "scale", title: "Pack weight", body: "Base, consumable, worn and total carried weight, updated the moment anything changes." },
   { icon: "checklist", title: "Packing assistant", body: "Where each of your items goes in the pack, and a checklist to tick off as you pack." },
@@ -26,7 +26,7 @@ const FEATURES: { icon: IconName; title: string; body: string }[] = [
 
 const FAQ = [
   ["Do I need an account?", "No. Everything works in guest mode and is saved in this browser. You can back up your trips and gear to a file and restore them on another device from Settings."],
-  ["Where do trail figures come from?", "Catalogue trails use the official park authority's published figures, each linked to its source and the date it was checked. Anything suggested by AI is labelled as such, and blanks stay blank rather than being guessed."],
+  ["Where do trail details come from?", "Routes and lengths come from OpenStreetMap. Trail details like campgrounds, transport and permits are researched by AI from park websites, with links to the sources. A handful of verified trails use official figures checked by hand. Everything is labelled so you know what to double-check."],
   ["Can I trust the pack weight and budget totals?", "Totals are calculated by the app from the numbers you enter, not by AI. If an item's weight is unknown, it's flagged rather than estimated silently."],
   ["Does it work offline?", "Saved trips, gear lists and checklists open without a connection once the app has loaded on your device. AI, maps and live weather need a connection, and Rovefern isn't a substitute for offline navigation."],
   ["Is Rovefern a safety service?", "No. Always check the official park authority, weather warnings and fire danger before you go, carry proper navigation and emergency communication, and leave your trip plan with someone you trust."],
@@ -156,14 +156,14 @@ export function Home() {
           <div className="row between" style={{ alignItems: "flex-end", marginBottom: 24 }}>
             <div>
               <h2>Featured trails</h2>
-              <p className="muted" style={{ margin: 0 }}>Each with figures from its official managing authority.</p>
+              <p className="muted" style={{ margin: 0 }}>Or search any walking track in Australia.</p>
             </div>
             <Link to="/explore" className="btn secondary">
               Explore all trails
             </Link>
           </div>
           <div className="grid grid-3">
-            {TRAILS.slice(0, 3).map((t, i) => (
+            {TRAILS.filter((t) => t.countryCode === "AU").concat(TRAILS.filter((t) => t.countryCode !== "AU")).slice(0, 3).map((t, i) => (
               <TrailCard key={t.id} trail={t} i={i} />
             ))}
           </div>
@@ -181,8 +181,8 @@ export function Home() {
             <p className="muted">Weights, costs, food quantities and fuel are calculated by the app, never by a language model. Change one thing and everything that depends on it updates.</p>
           </div>
           <div>
-            <h3>Built for anywhere</h3>
-            <p className="muted">Metric or imperial, any currency, local dates and time zones, and each country's own trail grading system rather than one scale for the world.</p>
+            <h3>Made for Australia</h3>
+            <p className="muted">Australian track grades, state park rules, public transport to trailheads, fishing licences and campground bookings. Metric or imperial, and any currency if you head overseas.</p>
           </div>
         </div>
       </section>

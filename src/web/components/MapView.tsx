@@ -38,7 +38,7 @@ const TILE_LAYERS = {
   },
 };
 
-export function MapView({ markers, track, height, label }: { markers: MapMarker[]; track?: [number, number][]; height?: number | string; label: string }) {
+export function MapView({ markers, track, segments, height, label }: { markers: MapMarker[]; track?: [number, number][]; segments?: [number, number][][]; height?: number | string; label: string }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const layer = useRef<L.LayerGroup | null>(null);
@@ -70,6 +70,10 @@ export function MapView({ markers, track, height, label }: { markers: MapMarker[
       L.polyline(track, { color: "#1f3b2c", weight: 4, opacity: 0.9 }).addTo(g);
       pts.push(...track);
     }
+    if (segments?.length) {
+      L.polyline(segments, { color: "#1f3b2c", weight: 4, opacity: 0.9 }).addTo(g);
+      for (const s of segments) pts.push(...s);
+    }
     for (const mk of markers) {
       const c = COLORS[mk.kind];
       const icon = L.divIcon({
@@ -87,7 +91,7 @@ export function MapView({ markers, track, height, label }: { markers: MapMarker[
     else if (pts.length === 1) m.setView(pts[0], 10);
     else m.setView([20, 0], 2);
     setTimeout(() => m.invalidateSize(), 50);
-  }, [markers, track]);
+  }, [markers, track, segments]);
 
   return <div ref={el} className="map" style={height ? { height } : undefined} role="region" aria-label={label} />;
 }

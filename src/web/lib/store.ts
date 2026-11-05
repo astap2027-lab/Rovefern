@@ -11,6 +11,7 @@ export interface ChatTurn {
   at: string;
   changes?: string[];
   error?: boolean;
+  sources?: { title: string; url: string }[];
 }
 
 export interface Settings extends UserSettings {
@@ -25,7 +26,7 @@ export interface AppState {
   trips: Trip[];
   /** Assistant conversation per trip, so context stays with the trip. */
   chats: Record<string, ChatTurn[]>;
-  planner: { messages: ChatTurn[]; last?: unknown; mode?: "quick" | "chat" };
+  planner: { messages: ChatTurn[]; last?: unknown; mode?: "quick" | "chat"; osm?: { key: string; name: string } };
   storage: "idb" | "local" | "none" | "loading";
 }
 
@@ -283,8 +284,8 @@ export const actions = {
   clearChat(tripId: string) {
     setState((s) => ({ ...s, chats: { ...s.chats, [tripId]: [] } }));
   },
-  setPlanner(planner: AppState["planner"]) {
-    setState((s) => ({ ...s, planner }));
+  setPlanner(planner: Partial<AppState["planner"]>) {
+    setState((s) => ({ ...s, planner: { ...s.planner, ...planner } }));
   },
 
   exportBackup(): string {

@@ -200,30 +200,22 @@ export function buildTripFromPlan(
   for (const s of draft.gearSuggestions) {
     const owned = matchesOwned(s.name, library.filter((g) => !usedLibrary.has(g.id)), s.category);
     let item = owned;
-    if (!item && s.alreadyOwned) {
-      item = newGearItem({
-        name: s.name,
-        category: s.category,
-        essential: s.essential,
-        shareable: s.shareable,
-        owned: true,
-        weightGrams: null,
-        weightProvenance: prov("unverified", { note: "You own this — add its weight in My Gear" }),
-      });
-      newGear.push(item);
-    }
     if (!item) {
       const typical = TYPICAL_WEIGHT_G[s.category];
+      const ai = s.estimatedWeightGrams;
       item = newGearItem({
         name: s.name,
         category: s.category,
         essential: s.essential,
         shareable: s.shareable,
-        owned: false,
-        weightGrams: typical?.typical ?? null,
-        weightProvenance: typical
-          ? prov("estimate", { note: `Typical for this category (${typical.range[0]}–${typical.range[1]} g). Replace with your item's real weight.` })
-          : prov("unverified", { note: "Weight unknown" }),
+        owned: s.alreadyOwned,
+        weightGrams: ai ?? typical?.typical ?? null,
+        weightProvenance:
+          ai != null
+            ? prov("ai", { note: "AI estimate of a typical weight. Weigh yours to make totals exact." })
+            : typical
+              ? prov("estimate", { note: `Typical for this category (${typical.range[0]}–${typical.range[1]} g).` })
+              : prov("unverified", { note: "Weight unknown" }),
         notes: s.reason ?? undefined,
       });
       newGear.push(item);

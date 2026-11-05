@@ -81,7 +81,8 @@ test("trail overlay: official stages replace AI distances, AI notes kept", () =>
   assert.equal(trip.days[0].from, "Glade Wharf");
   assert.equal(trip.participants.length, 2);
   assert.equal(newGear[0].owned, true);
-  assert.equal(newGear[0].weightGrams, null); // never invented
+  assert.equal(newGear[0].weightGrams, 1800); // labelled category estimate, not a fact
+  assert.equal(newGear[0].weightProvenance.kind, "estimate");
   assert.equal(trip.gear[0].scope, "assigned"); // shared tent in a group
   assert.equal(trip.budget[0].provenance.kind, "ai");
   assert.equal(deriveTrip(trip, newGear).budget.estimatedTotal, 200);
